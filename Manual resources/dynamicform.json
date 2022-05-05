@@ -84,7 +84,7 @@
         "templateOptions":  {
                                 "label":  "Read Permissions",
                                 "required":  false,
-                                "filterable":  false,
+                                "filterable":  true,
                                 "useDataSource":  true,
                                 "dualList":  {
                                                  "options":  [
@@ -137,7 +137,7 @@
         "templateOptions":  {
                                 "label":  "Write Permissions",
                                 "required":  false,
-                                "filterable":  false,
+                                "filterable":  true,
                                 "useDataSource":  true,
                                 "dualList":  {
                                                  "options":  [
