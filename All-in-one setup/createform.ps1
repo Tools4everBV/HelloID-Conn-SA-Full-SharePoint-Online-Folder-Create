@@ -6,7 +6,7 @@
 $portalUrl = "https://CUSTOMER.helloid.com"
 $apiKey = "API_KEY"
 $apiSecret = "API_SECRET"
-$delegatedFormAccessGroupNames = @("Users") #Only unique names are supported. Groups must exist!
+$delegatedFormAccessGroupNames = @("") #Only unique names are supported. Groups must exist!
 $delegatedFormCategories = @("Sharepoint") #Only unique names are supported. Categories will be created if not exists
 $script:debugLogging = $false #Default value: $false. If $true, the HelloID resource GUIDs will be shown in the logging
 $script:duplicateForm = $false #Default value: $false. If $true, the HelloID resource names will be changed to import a duplicate Form
@@ -16,28 +16,25 @@ $script:duplicateFormSuffix = "_tmp" #the suffix will be added to all HelloID re
 #NOTE: You can also update the HelloID Global variable values afterwards in the HelloID Admin Portal: https://<CUSTOMER>.helloid.com/admin/variablelibrary
 $globalHelloIDVariables = [System.Collections.Generic.List[object]]@();
 
-#Global variable #1 >> AADAppId
-$tmpName = @'
-AADAppId
-'@ 
-$tmpValue = @'
-'@ 
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
-
-#Global variable #2 >> AADtenantID
-$tmpName = @'
-AADtenantID
-'@ 
-$tmpValue = @'
-'@ 
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
-
-#Global variable #3 >> AADAppSecret
+#Global variable #1 >> AADAppSecret
 $tmpName = @'
 AADAppSecret
 '@ 
-$tmpValue = @'
+$tmpValue = "" 
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
+
+#Global variable #2 >> AADAppId
+$tmpName = @'
+AADAppId
 '@ 
+$tmpValue = "" 
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
+
+#Global variable #3 >> AADtenantID
+$tmpName = @'
+AADtenantID
+'@ 
+$tmpValue = "" 
 $globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 #Global variable #4 >> companyName
@@ -278,7 +275,7 @@ function Invoke-HelloIDDelegatedForm {
     param(
         [parameter(Mandatory)][String]$DelegatedFormName,
         [parameter(Mandatory)][String]$DynamicFormGuid,
-        [parameter()][String][AllowEmptyString()]$AccessGroups,
+        [parameter()][Array][AllowEmptyString()]$AccessGroups,
         [parameter()][String][AllowEmptyString()]$Categories,
         [parameter(Mandatory)][String]$UseFaIcon,
         [parameter()][String][AllowEmptyString()]$FaIcon,
@@ -302,11 +299,15 @@ function Invoke-HelloIDDelegatedForm {
                 name            = $DelegatedFormName;
                 dynamicFormGUID = $DynamicFormGuid;
                 isEnabled       = "True";
-                accessGroups    = (ConvertFrom-Json-WithEmptyArray($AccessGroups));
                 useFaIcon       = $UseFaIcon;
                 faIcon          = $FaIcon;
                 task            = ConvertFrom-Json -inputObject $task;
-            }    
+            }
+            if(-not[String]::IsNullOrEmpty($AccessGroups)) { 
+                $body += @{
+                    accessGroups    = (ConvertFrom-Json-WithEmptyArray($AccessGroups));
+                }
+            }
             $body = ConvertTo-Json -InputObject $body -Depth 100
     
             $uri = ($script:PortalBaseUrl +"api/v1/delegatedforms")
@@ -575,25 +576,31 @@ Invoke-HelloIDDynamicForm -FormName $dynamicFormName -FormSchema $tmpSchema  -re
 
 <# Begin: Delegated Form Access Groups and Categories #>
 $delegatedFormAccessGroupGuids = @()
-foreach($group in $delegatedFormAccessGroupNames) {
-    try {
-        $uri = ($script:PortalBaseUrl +"api/v1/groups/$group")
-        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:headers -ContentType "application/json" -Verbose:$false
-        $delegatedFormAccessGroupGuid = $response.groupGuid
-        $delegatedFormAccessGroupGuids += $delegatedFormAccessGroupGuid
-        
-        Write-Information "HelloID (access)group '$group' successfully found$(if ($script:debugLogging -eq $true) { ": " + $delegatedFormAccessGroupGuid })"
-    } catch {
-        Write-Error "HelloID (access)group '$group', message: $_"
+if(-not[String]::IsNullOrEmpty($delegatedFormAccessGroupNames)){
+    foreach($group in $delegatedFormAccessGroupNames) {
+        try {
+            $uri = ($script:PortalBaseUrl +"api/v1/groups/$group")
+            $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:headers -ContentType "application/json" -Verbose:$false
+            $delegatedFormAccessGroupGuid = $response.groupGuid
+            $delegatedFormAccessGroupGuids += $delegatedFormAccessGroupGuid
+            
+            Write-Information "HelloID (access)group '$group' successfully found$(if ($script:debugLogging -eq $true) { ": " + $delegatedFormAccessGroupGuid })"
+        } catch {
+            Write-Error "HelloID (access)group '$group', message: $_"
+        }
+    }
+    if($null -ne $delegatedFormAccessGroupGuids){
+        $delegatedFormAccessGroupGuids = ($delegatedFormAccessGroupGuids | Select-Object -Unique | ConvertTo-Json -Depth 100 -Compress)
     }
 }
-$delegatedFormAccessGroupGuids = ($delegatedFormAccessGroupGuids | Select-Object -Unique | ConvertTo-Json -Depth 100 -Compress)
 
 $delegatedFormCategoryGuids = @()
 foreach($category in $delegatedFormCategories) {
     try {
         $uri = ($script:PortalBaseUrl +"api/v1/delegatedformcategories/$category")
         $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:headers -ContentType "application/json" -Verbose:$false
+        $response = $response | Where-Object {$_.name.en -eq $category}
+        
         $tmpGuid = $response.delegatedFormCategoryGuid
         $delegatedFormCategoryGuids += $tmpGuid
         
@@ -622,7 +629,7 @@ $delegatedFormName = @'
 Sharepoint - Folder Create
 '@
 $tmpTask = @'
-{"name":" Sharepoint - Folder Create","script":"# script\r\n$body = @{\r\n    \"client_id\"=$AADAppId\r\n    \"scope\"=\"https://graph.microsoft.com/.default\"\r\n    \"client_secret\"=$AADAppSecret\r\n    \"grant_type\"=\"client_credentials\"\r\n}\r\n$siteid = $form.dropDownSites.id\r\n$sitename = $form.dropDownSites.name\r\n$newfoldername = $form.folderName\r\n$readPermissions = $form.dualListRead.Right\r\n$writePermissions = $form.dualListWrite.Right\r\n\r\n$tokenquery = Invoke-RestMethod -uri https://login.microsoftonline.com/$($AADtenantID)/oauth2/v2.0/token -body $body -Method Post -ContentType \u0027application/x-www-form-urlencoded\u0027\r\n\r\n$baseGraphUri = \"https://graph.microsoft.com/\"\r\n$headers = @{\r\n    \"content-type\" = \"Application/Json\"\r\n    \"authorization\" = \"Bearer $($tokenquery.access_token)\"\r\n}\r\n\t\r\n$created = $false\r\ntry {\r\n    $bodypost = @{\r\n        \"name\" = $newfoldername\r\n        \"folder\" = @{}\r\n    }\r\n    $a = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/root/children\" -Method POST -body ($bodypost | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Folder created: $newfoldername\"\r\n    \r\n    $mailnick = $sitename + \"_\" + $newfoldername\r\n    $mailnick = $mailnick -replace \" \", \"_\"\r\n    $bodygroupread = @{\r\n        \"description\" = \"$($a.id) - READ\"\r\n        \"displayName\" = \"Read Group for Site $sitename and folder $newfoldername\"\r\n        \"mailEnabled\" = $false\r\n        \"mailNickName\" = $mailnick + \"_read\"\r\n        \"securityEnabled\" = $true\r\n    }\r\n    $aread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/groups\" -Method POST -body ($bodygroupread | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Read Group created for folder\"\r\n    \r\n    $bodygroupwrite = @{\r\n        \"description\" = \"$($a.id) - WRITE\"\r\n        \"displayName\" = \"Write Group for Site $sitename and folder $newfoldername\"\r\n        \"mailEnabled\" = $false\r\n        \"mailNickName\" = $mailnick + \"_write\"\r\n        \"securityEnabled\" = $true\r\n    }\r\n    $awrite = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/groups\" -Method POST -body ($bodygroupwrite | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Write Group created for folder\"\r\n    $created = $true\r\n}\r\ncatch {\r\n    Write-Error \"Error occured while creating folder. Error $_\"\r\n}\r\n\r\nif ($created) {\r\n    for ($i = 0; $i -lt 20; $i++)\r\n    {  \r\n        try {            \r\n            $bodyinviteread = @{\r\n                \"requireSignIn\" = $true\r\n                \"sendInvitation\" = $false\r\n                \"roles\" = @(\"read\")\r\n                \"recipients\" =  @(@{\"objectId\" = $aread.id})\r\n            }\r\n            $ainviteread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/items/$($a.id)/invite\" -Method POST -body ($bodyinviteread | ConvertTo-Json) -Headers $headers\r\n            Write-Information \"Read Group invited to folder\"\r\n        \r\n            $bodyinvitewrite = @{\r\n                \"requireSignIn\" = $true\r\n                \"sendInvitation\" = $false\r\n                \"roles\" = @(\"write\")\r\n                \"recipients\" =  @(@{\"objectId\" = $awrite.id})\r\n            }\r\n            $ainviteread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/items/$($a.id)/invite\" -Method POST -body ($bodyinvitewrite | ConvertTo-Json) -Headers $headers\r\n            \r\n            Write-Information \"Write Group invited to folder\"\r\n            break\r\n        }\r\n        catch {\r\n            Start-Sleep -Seconds 20\r\n        }\r\n    }\r\n        \r\n    if($readPermissions -ne $null){\r\n        try {\r\n            foreach($user in $readPermissions){\r\n                $addGroupMembershipUri = $baseGraphUri + \"v1.0/groups/$($aread.id)/members\" + \u0027/$ref\u0027\r\n                $body = @{ \"@odata.id\"= \"$baseGraphUri/v1.0/users/$($user.id)\" } | ConvertTo-Json -Depth 10\r\n    \r\n                $response = Invoke-RestMethod -Method POST -Uri $addGroupMembershipUri -Body $body -Headers $headers -Verbose:$false\r\n            }\r\n    \r\n            Write-Information \"Finished adding AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]\"\r\n        } catch {\r\n            Write-Error \"Could not add AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]. Error: $($_.Exception.Message)\"\r\n        }\r\n    }\r\n    if($writePermissions -ne $null){\r\n        try {\r\n            foreach($user in $writePermissions){                \r\n                $addGroupMembershipUri = $baseGraphUri + \"v1.0/groups/$($awrite.id)/members\" + \u0027/$ref\u0027\r\n                $body = @{ \"@odata.id\"= \"$baseGraphUri/v1.0/users/$($user.id)\" } | ConvertTo-Json -Depth 10\r\n    \r\n                $response = Invoke-RestMethod -Method POST -Uri $addGroupMembershipUri -Body $body -Headers $headers -Verbose:$false\r\n            }\r\n    \r\n            Write-Information \"Finished adding AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]\"\r\n        } catch {\r\n            Write-Error \"Could not add AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]. Error: $($_.Exception.Message)\"\r\n        }\r\n    }\r\n}","runInCloud":true}
+{"name":"Sharepoint - Folder Create","script":"# script\r\n$body = @{\r\n    \"client_id\"=$AADAppId\r\n    \"scope\"=\"https://graph.microsoft.com/.default\"\r\n    \"client_secret\"=$AADAppSecret\r\n    \"grant_type\"=\"client_credentials\"\r\n}\r\n$siteid = $form.dropDownSites.id\r\n$sitename = $form.dropDownSites.name\r\n$newfoldername = $form.folderName\r\n$readPermissions = $form.dualListRead.Right\r\n$writePermissions = $form.dualListWrite.Right\r\n\r\n$tokenquery = Invoke-RestMethod -uri https://login.microsoftonline.com/$($AADtenantID)/oauth2/v2.0/token -body $body -Method Post -ContentType \u0027application/x-www-form-urlencoded\u0027\r\n\r\n$baseGraphUri = \"https://graph.microsoft.com/\"\r\n$headers = @{\r\n    \"content-type\" = \"Application/Json\"\r\n    \"authorization\" = \"Bearer $($tokenquery.access_token)\"\r\n}\r\n\t\r\n$created = $false\r\ntry {\r\n    $bodypost = @{\r\n        \"name\" = $newfoldername\r\n        \"folder\" = @{}\r\n    }\r\n    $a = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/root/children\" -Method POST -body ($bodypost | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Folder created: $newfoldername\"\r\n\r\n    $Log = @{\r\n            Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n            System            = \"Sharepoint\" # optional (free format text) \r\n            Message           = \"Successfully created folder:  [$($newfoldername)]\" # required (free format text) \r\n            IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $sitename # optional (free format text) \r\n            TargetIdentifier  = $newfoldername # optional (free format text) \r\n    }\r\n    #send result back  \r\n    Write-Information -Tags \"Audit\" -MessageData $log\r\n    \r\n    $mailnick = $sitename + \"_\" + $newfoldername\r\n    $mailnick = $mailnick -replace \" \", \"_\"\r\n    $bodygroupread = @{\r\n        \"description\" = \"$($a.id) - READ\"\r\n        \"displayName\" = \"Read Group for Site $sitename and folder $newfoldername\"\r\n        \"mailEnabled\" = $false\r\n        \"mailNickName\" = $mailnick + \"_read\"\r\n        \"securityEnabled\" = $true\r\n    }\r\n    $aread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/groups\" -Method POST -body ($bodygroupread | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Read Group created for folder\"\r\n\r\n    $Log = @{\r\n            Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n            System            = \"Sharepoint\" # optional (free format text) \r\n            Message           = \"Successfully created read group for folder:  [$($newfoldername)]\" # required (free format text) \r\n            IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $sitename # optional (free format text) \r\n            TargetIdentifier  = $newfoldername # optional (free format text) \r\n    }\r\n    #send result back  \r\n    Write-Information -Tags \"Audit\" -MessageData $log\r\n    \r\n    $bodygroupwrite = @{\r\n        \"description\" = \"$($a.id) - WRITE\"\r\n        \"displayName\" = \"Write Group for Site $sitename and folder $newfoldername\"\r\n        \"mailEnabled\" = $false\r\n        \"mailNickName\" = $mailnick + \"_write\"\r\n        \"securityEnabled\" = $true\r\n    }\r\n    $awrite = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/groups\" -Method POST -body ($bodygroupwrite | ConvertTo-Json) -Headers $headers\r\n    Write-Information \"Write Group created for folder\"\r\n\r\n    $Log = @{\r\n            Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n            System            = \"Sharepoint\" # optional (free format text) \r\n            Message           = \"Successfully created write group for folder:  [$($newfoldername)]\" # required (free format text) \r\n            IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $sitename # optional (free format text) \r\n            TargetIdentifier  = $newfoldername # optional (free format text) \r\n    }\r\n    #send result back  \r\n    Write-Information -Tags \"Audit\" -MessageData $log\r\n\r\n    $created = $true\r\n}\r\ncatch {\r\n    Write-Error \"Error occured while creating folder. Error $_\"\r\n\r\n    $Log = @{\r\n            Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n            System            = \"Sharepoint\" # optional (free format text) \r\n            Message           = \"Error occured while creating folder: [$($newfoldername)]. Error $_\" # required (free format text) \r\n            IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $sitename # optional (free format text) \r\n            TargetIdentifier  = $newfoldername # optional (free format text) \r\n    }\r\n    #send result back  \r\n    Write-Information -Tags \"Audit\" -MessageData $log\r\n}\r\n\r\nif ($created) {\r\n    for ($i = 0; $i -lt 20; $i++)\r\n    {  \r\n        try {            \r\n            $bodyinviteread = @{\r\n                \"requireSignIn\" = $true\r\n                \"sendInvitation\" = $false\r\n                \"roles\" = @(\"read\")\r\n                \"recipients\" =  @(@{\"objectId\" = $aread.id})\r\n            }\r\n            $ainviteread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/items/$($a.id)/invite\" -Method POST -body ($bodyinviteread | ConvertTo-Json) -Headers $headers\r\n            Write-Information \"Read Group invited to folder\"\r\n\r\n            $Log = @{\r\n                Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Read Group invited to folder:  [$($newfoldername)]\" # required (free format text) \r\n                IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n        \r\n            $bodyinvitewrite = @{\r\n                \"requireSignIn\" = $true\r\n                \"sendInvitation\" = $false\r\n                \"roles\" = @(\"write\")\r\n                \"recipients\" =  @(@{\"objectId\" = $awrite.id})\r\n            }\r\n            $ainviteread = Invoke-RestMethod -uri \"$baseGraphUri/v1.0/sites/$siteid/drive/items/$($a.id)/invite\" -Method POST -body ($bodyinvitewrite | ConvertTo-Json) -Headers $headers\r\n            \r\n            Write-Information \"Write Group invited to folder\"\r\n            $Log = @{\r\n                Action            = \"CreateGroup\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Write Group invited to folder:  [$($newfoldername)]\" # required (free format text) \r\n                IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n            break\r\n        }\r\n        catch {\r\n            Start-Sleep -Seconds 20\r\n        }\r\n    }\r\n        \r\n    if($readPermissions -ne $null){\r\n        try {\r\n            foreach($user in $readPermissions){\r\n                $addGroupMembershipUri = $baseGraphUri + \"v1.0/groups/$($aread.id)/members\" + \u0027/$ref\u0027\r\n                $body = @{ \"@odata.id\"= \"$baseGraphUri/v1.0/users/$($user.id)\" } | ConvertTo-Json -Depth 10\r\n    \r\n                $response = Invoke-RestMethod -Method POST -Uri $addGroupMembershipUri -Body $body -Headers $headers -Verbose:$false\r\n            }\r\n    \r\n            Write-Information \"Finished adding AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]\"\r\n\r\n            $Log = @{\r\n                Action            = \"AddMembers\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Finished adding AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]\" # required (free format text) \r\n                IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n        } catch {\r\n            Write-Error \"Could not add AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]. Error: $($_.Exception.Message)\"\r\n\r\n            $Log = @{\r\n                Action            = \"AddMembers\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Could not add AzureAD users [$($readPermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupread.displayName)]. Error: $($_.Exception.Message)\" # required (free format text) \r\n                IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n        }\r\n    }\r\n    if($writePermissions -ne $null){\r\n        try {\r\n            foreach($user in $writePermissions){                \r\n                $addGroupMembershipUri = $baseGraphUri + \"v1.0/groups/$($awrite.id)/members\" + \u0027/$ref\u0027\r\n                $body = @{ \"@odata.id\"= \"$baseGraphUri/v1.0/users/$($user.id)\" } | ConvertTo-Json -Depth 10\r\n    \r\n                $response = Invoke-RestMethod -Method POST -Uri $addGroupMembershipUri -Body $body -Headers $headers -Verbose:$false\r\n            }\r\n    \r\n            Write-Information \"Finished adding AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]\"\r\n\r\n            $Log = @{\r\n                Action            = \"AddMembers\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Finished adding AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]\" # required (free format text) \r\n                IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n\r\n        } catch {\r\n            Write-Error \"Could not add AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]. Error: $($_.Exception.Message)\"\r\n\r\n            $Log = @{\r\n                Action            = \"AddMembers\" # optional. ENUM (undefined = default) \r\n                System            = \"Sharepoint\" # optional (free format text) \r\n                Message           = \"Could not add AzureAD users [$($writePermissions | ConvertTo-Json)] to AzureAD group [$($bodygroupwrite.displayName)]. Error: $($_.Exception.Message)\" # required (free format text) \r\n                IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n                TargetDisplayName = $sitename # optional (free format text) \r\n                TargetIdentifier  = $newfoldername # optional (free format text) \r\n            }\r\n            #send result back  \r\n            Write-Information -Tags \"Audit\" -MessageData $log\r\n        }\r\n    }\r\n}","runInCloud":true}
 '@ 
 
 Invoke-HelloIDDelegatedForm -DelegatedFormName $delegatedFormName -DynamicFormGuid $dynamicFormGuid -AccessGroups $delegatedFormAccessGroupGuids -Categories $delegatedFormCategoryGuids -UseFaIcon "True" -FaIcon "fa fa-folder" -task $tmpTask -returnObject ([Ref]$delegatedFormRef) 
